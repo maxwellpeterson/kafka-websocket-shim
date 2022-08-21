@@ -2,6 +2,7 @@ package shim
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
 	"net/url"
 	"strconv"
@@ -15,23 +16,34 @@ const (
 	sizeBytes = 4
 )
 
-var (
-	ErrUnalignedWrite = errors.New("write unaligned with websocket frame")
-)
-
 type InvalidNetworkError string
 
 func (e InvalidNetworkError) Error() string {
-	return "invalid network " + string(e)
+	return "shim: invalid network: expected tcp but got " + string(e)
+}
+
+type UnalignedWriteError int
+
+func (e UnalignedWriteError) Error() string {
+	return "shim: unaligned write: final byte at index " +
+		strconv.Itoa(int(e)) + " is not aligned with websocket frame"
 }
 
 type UnexpectedMessageTypeError int
 
 func (e UnexpectedMessageTypeError) Error() string {
-	return "unexpected websocket message type " + strconv.Itoa(int(e))
+	return "shim: invalid websocket message type: expected " +
+		strconv.Itoa(int(websocket.BinaryMessage)) + " but got " +
+		strconv.Itoa(int(e))
 }
 
-type Dialer struct{}
+type Dialer struct {
+	tls bool
+}
+
+func NewDialer(tls bool) *Dialer {
+	return &Dialer{tls: tls}
+}
 
 func (d Dialer) Dial(network, addr string) (net.Conn, error) {
 	return d.DialContext(context.Background(), network, addr)
@@ -41,17 +53,16 @@ func (d Dialer) DialContext(ctx context.Context, network, addr string) (net.Conn
 	if network != "tcp" {
 		return nil, InvalidNetworkError(network)
 	}
-
-	u, err := url.Parse(addr)
-	if err != nil {
-		return nil, errors.Wrap(err, "parse address failed")
+	u := url.URL{Host: addr}
+	if d.tls {
+		u.Scheme = "wss"
+	} else {
+		u.Scheme = "ws"
 	}
-	u.Scheme = "wss"
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		return nil, errors.Wrap(err, "dial websocket failed")
+		return nil, errors.Wrap(err, "shim: dial websocket failed")
 	}
-
 	return &Conn{ws: ws}, nil
 }
 
@@ -63,6 +74,9 @@ type Conn struct {
 	ws *websocket.Conn
 }
 
+// Potential problem if r is not read completely and read is called again, some
+// bytes could be dropped!
+// TODO: Needs error translation?
 func (c *Conn) Read(b []byte) (int, error) {
 	msgType, r, err := c.ws.NextReader()
 	if err != nil {
@@ -78,15 +92,16 @@ func (c *Conn) Read(b []byte) (int, error) {
 // len(p)." It's not clear if this also applies to the Write method of net.Conn.
 // We might need to violate this invariant here to match the behavior of TCP,
 // which would have no problem with partial (or "unaligned") message writes.
+// TODO: Needs error translation?
 func (c *Conn) Write(b []byte) (int, error) {
 	written := 0
 	for len(b) > 0 {
 		if len(b) < sizeBytes {
-			return written, ErrUnalignedWrite
+			return written, UnalignedWriteError(written + len(b) - 1)
 		}
-		size := parseInt32(b[0], b[1], b[2], b[3])
+		size := int32(binary.BigEndian.Uint32(b))
 		if len(b[sizeBytes:]) < int(size) {
-			return written, ErrUnalignedWrite
+			return written, UnalignedWriteError(written + len(b) - 1)
 		}
 		totalSize := sizeBytes + int(size)
 		if err := c.ws.WriteMessage(websocket.BinaryMessage, b[:totalSize]); err != nil {
@@ -96,16 +111,6 @@ func (c *Conn) Write(b []byte) (int, error) {
 		b = b[totalSize:]
 	}
 	return written, nil
-}
-
-// Assumes big endian byte order!
-func parseInt32(a, b, c, d byte) int32 {
-	var val int32
-	val |= int32(a)
-	val |= int32(b) << 8
-	val |= int32(c) << 16
-	val |= int32(d) << 24
-	return val
 }
 
 func (c *Conn) Close() error {
