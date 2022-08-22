@@ -42,8 +42,12 @@ type Dialer struct {
 	tls bool
 }
 
-func NewDialer(tls bool) *Dialer {
-	return &Dialer{tls: tls}
+type DialerConfig struct {
+	Tls bool
+}
+
+func NewDialer(cfg DialerConfig) *Dialer {
+	return &Dialer{tls: cfg.Tls}
 }
 
 func (d Dialer) Dial(network, addr string) (net.Conn, error) {
