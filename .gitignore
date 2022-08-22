@@ -1,0 +1,4 @@
+*.~undo-tree~
+
+# Name of executable
+kafka-websocket-shim

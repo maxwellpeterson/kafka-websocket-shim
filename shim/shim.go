@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -71,21 +72,30 @@ func (d Dialer) DialContext(ctx context.Context, network, addr string) (net.Conn
 // websocket connection will use TLS, and only the traffic between the client
 // and the shim will be unencrypted.
 type Conn struct {
-	ws *websocket.Conn
+	ws       *websocket.Conn
+	readBuff []byte
+	mu       sync.Mutex
 }
 
-// Potential problem if r is not read completely and read is called again, some
-// bytes could be dropped!
 // TODO: Needs error translation?
 func (c *Conn) Read(b []byte) (int, error) {
-	msgType, r, err := c.ws.NextReader()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.readBuff) > 0 {
+		n := copy(b, c.readBuff)
+		c.readBuff = c.readBuff[n:]
+		return n, nil
+	}
+	msgType, bytes, err := c.ws.ReadMessage()
 	if err != nil {
 		return 0, err
 	}
 	if msgType != websocket.BinaryMessage {
 		return 0, UnexpectedMessageTypeError(msgType)
 	}
-	return r.Read(b)
+	n := copy(b, bytes)
+	c.readBuff = bytes[n:]
+	return n, nil
 }
 
 // TODO: io.Writer says: "Write must return a non-nil error if it returns n <
