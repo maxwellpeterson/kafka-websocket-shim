@@ -66,7 +66,7 @@ func MakeMsg(length int32, fill byte) []byte {
 	return msg
 }
 
-func InvalidNetwork(t *testing.T) {
+func TestInvalidNetwork(t *testing.T) {
 	d := NewDialer(DialerConfig{TLS: false})
 	c, err := d.Dial("foo", "localhost:7979")
 	assert.Nil(t, c)
@@ -118,7 +118,7 @@ func TestReadMany(t *testing.T) {
 	}
 }
 
-func ReadUnexpectedMessageType(t *testing.T) {
+func TestReadInvalidMessageType(t *testing.T) {
 	addr := "localhost:8082"
 	handler := func(c *websocket.Conn) error {
 		return c.WriteMessage(websocket.TextMessage, []byte("hello"))

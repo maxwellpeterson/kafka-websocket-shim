@@ -92,7 +92,7 @@ func (c *Conn) Read(b []byte) (int, error) {
 	}
 	msgType, bytes, err := c.ws.ReadMessage()
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "shim: read websocket message failed")
 	}
 	if msgType != websocket.BinaryMessage {
 		return 0, InvalidMessageTypeError(msgType)
@@ -106,7 +106,7 @@ func (c *Conn) Read(b []byte) (int, error) {
 // written in full with a single write call. In other words, the client does not
 // write the first 10 bytes of the message, then the next 10, etc. This
 // assumption holds because making one write call per message (or message batch)
-// is the obvious, efficient choice that we can expect clients to make. If this
+// is the natural, efficient choice that we can expect clients to make. If this
 // assumption is violated, we return an error. Of course, we could also handle
 // the fractional write case, but I decided to be lazy
 func (c *Conn) Write(b []byte) (int, error) {
@@ -137,7 +137,7 @@ func (c *Conn) Write(b []byte) (int, error) {
 		// TCP directly in the future. For now, we want to avoid any protocol
 		// modifications that are specific to WebSocket usage
 		if err := c.ws.WriteMessage(websocket.BinaryMessage, b[:totalSize]); err != nil {
-			return written, errors.Wrap(err, "shim: websocket write failed")
+			return written, errors.Wrap(err, "shim: write websocket message failed")
 		}
 		written += totalSize
 		b = b[totalSize:]
