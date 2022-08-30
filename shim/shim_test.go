@@ -58,12 +58,19 @@ func StartServer(addr string, handler func(*websocket.Conn) error) StopFunc {
 }
 
 func MakeMsg(length int32, fill byte) []byte {
-	msg := make([]byte, sizeBytes+length)
+	msg := make([]byte, int32Size+length)
 	binary.BigEndian.PutUint32(msg, uint32(length))
-	for i := range msg[sizeBytes:] {
-		msg[sizeBytes+i] = fill
+	for i := range msg[int32Size:] {
+		msg[int32Size+i] = fill
 	}
 	return msg
+}
+
+func InvalidNetwork(t *testing.T) {
+	d := NewDialer(DialerConfig{TLS: false})
+	c, err := d.Dial("foo", "localhost:7979")
+	assert.Nil(t, c)
+	assert.ErrorIs(t, err, InvalidNetworkError("foo"))
 }
 
 func TestReadOne(t *testing.T) {
@@ -73,7 +80,7 @@ func TestReadOne(t *testing.T) {
 	}
 	defer StartServer(addr, handler).Stop()
 
-	d := NewDialer(false)
+	d := NewDialer(DialerConfig{TLS: false})
 	c, err := d.Dial("tcp", addr)
 	assert.Nil(t, err)
 	defer c.Close()
@@ -97,7 +104,7 @@ func TestReadMany(t *testing.T) {
 	}
 	defer StartServer(addr, handler).Stop()
 
-	d := NewDialer(false)
+	d := NewDialer(DialerConfig{TLS: false})
 	c, err := d.Dial("tcp", addr)
 	assert.Nil(t, err)
 	defer c.Close()
@@ -118,14 +125,14 @@ func ReadUnexpectedMessageType(t *testing.T) {
 	}
 	defer StartServer(addr, handler).Stop()
 
-	d := NewDialer(false)
+	d := NewDialer(DialerConfig{TLS: false})
 	c, err := d.Dial("tcp", addr)
 	assert.Nil(t, err)
 	defer c.Close()
 
 	buf := make([]byte, 150)
 	n, err := c.Read(buf)
-	assert.ErrorIs(t, err, UnexpectedMessageTypeError(websocket.TextMessage))
+	assert.ErrorIs(t, err, InvalidMessageTypeError(websocket.TextMessage))
 	assert.Equal(t, 0, n)
 }
 
@@ -142,7 +149,7 @@ func TestWriteOne(t *testing.T) {
 	}
 	defer StartServer(addr, handler).Stop()
 
-	d := NewDialer(false)
+	d := NewDialer(DialerConfig{TLS: false})
 	c, err := d.Dial("tcp", addr)
 	assert.Nil(t, err)
 	defer c.Close()
@@ -167,7 +174,7 @@ func TestWriteMany(t *testing.T) {
 	}
 	defer StartServer(addr, handler).Stop()
 
-	d := NewDialer(false)
+	d := NewDialer(DialerConfig{TLS: false})
 	c, err := d.Dial("tcp", addr)
 	assert.Nil(t, err)
 	defer c.Close()
@@ -179,20 +186,24 @@ func TestWriteMany(t *testing.T) {
 	}
 }
 
-func TestWriteUnaligned(t *testing.T) {
+func TestWritePartial(t *testing.T) {
 	addr := "localhost:8085"
 	handler := func(c *websocket.Conn) error {
 		return nil
 	}
 	defer StartServer(addr, handler).Stop()
 
-	d := NewDialer(false)
+	d := NewDialer(DialerConfig{TLS: false})
 	c, err := d.Dial("tcp", addr)
 	assert.Nil(t, err)
 	defer c.Close()
 
-	msgTrunc := msg1[:len(msg1)/2]
+	truncLen := 50 + int32Size
+	msgTrunc := msg1[:truncLen]
 	n, err := c.Write(msgTrunc)
-	assert.ErrorIs(t, err, UnalignedWriteError(len(msgTrunc)-1))
+	assert.ErrorIs(t, err, PartialWriteError{
+		expected: len(msg1) - int32Size,
+		actual:   truncLen - int32Size,
+	})
 	assert.Equal(t, 0, n)
 }

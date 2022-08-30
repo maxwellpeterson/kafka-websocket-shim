@@ -21,7 +21,7 @@ func main() {
 		log.Fatal("broker flag required")
 	}
 
-	dialer := shim.NewDialer(shim.DialerConfig{Tls: *tls})
+	dialer := shim.NewDialer(shim.DialerConfig{TLS: *tls})
 	logger := kgo.BasicLogger(
 		os.Stdout,
 		kgo.LogLevelDebug,
@@ -34,6 +34,7 @@ func main() {
 		kgo.ConsumeTopics("test-topic"),
 		kgo.Dialer(dialer.DialContext),
 		kgo.WithLogger(logger),
+		kgo.ProducerBatchCompression(kgo.NoCompression()),
 	)
 	if err != nil {
 		log.Fatal(errors.Wrap(err, "client create failed"))
