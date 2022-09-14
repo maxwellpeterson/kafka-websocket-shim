@@ -22,16 +22,6 @@ func (e InvalidNetworkError) Error() string {
 	return fmt.Sprintf("shim: invalid network: expected tcp but got %s", string(e))
 }
 
-type PartialWriteError struct {
-	expected int
-	actual   int
-}
-
-func (e PartialWriteError) Error() string {
-	return fmt.Sprintf("shim: partial write: expected %d bytes but only got %d bytes",
-		e.expected, e.actual)
-}
-
 type InvalidMessageTypeError int
 
 func (e InvalidMessageTypeError) Error() string {
@@ -39,6 +29,7 @@ func (e InvalidMessageTypeError) Error() string {
 		websocket.BinaryMessage, e)
 }
 
+// Implements proxy.Dialer and proxy.ContextDialer
 type Dialer struct {
 	tls bool
 }
@@ -72,22 +63,25 @@ func (d Dialer) DialContext(ctx context.Context, network, addr string) (net.Conn
 	return &Conn{ws: ws}, nil
 }
 
-// Important: Only Kafka protocol messages can be read or written. This means no
-// TLS handshake! This isn't a serious problem since the underlying WebSocket
+// Implements net.Conn
+//
+// Note: Only Kafka protocol messages can be read or written. This means no TLS
+// handshake! This isn't a serious problem since the underlying WebSocket
 // connection can provide TLS on its own
 type Conn struct {
-	ws       *websocket.Conn
-	readBuff []byte
+	ws   *websocket.Conn
+	rBuf []byte
+	wBuf []byte
 }
 
 func (c *Conn) Read(b []byte) (int, error) {
-	if len(c.readBuff) > 0 {
+	if len(c.rBuf) > 0 {
 		// If we've buffered the remainder of a WebSocket message that was
 		// partially read, read from this buffer first. We don't make another
 		// read call to the underlying WebSocket until this buffer is empty,
 		// meaning the previous message has been fully read
-		n := copy(b, c.readBuff)
-		c.readBuff = c.readBuff[n:]
+		n := copy(b, c.rBuf)
+		c.rBuf = c.rBuf[n:]
 		return n, nil
 	}
 	msgType, bytes, err := c.ws.ReadMessage()
@@ -98,29 +92,20 @@ func (c *Conn) Read(b []byte) (int, error) {
 		return 0, InvalidMessageTypeError(msgType)
 	}
 	n := copy(b, bytes)
-	c.readBuff = bytes[n:]
+	c.rBuf = bytes[n:]
 	return n, nil
 }
 
-// We make a cheater assumption here that Kafka protocol messages are always
-// written in full with a single write call. In other words, the client does not
-// write the first 10 bytes of the message, then the next 10, etc. This
-// assumption holds because making one write call per message (or message batch)
-// is the natural, efficient choice that we can expect clients to make. If this
-// assumption is violated, we return an error. Of course, we could also handle
-// the fractional write case, but I decided to be lazy
 func (c *Conn) Write(b []byte) (int, error) {
-	written := 0
-	for len(b) > 0 {
-		if len(b) < int32Size {
-			return written, PartialWriteError{expected: int32Size, actual: len(b)}
+	written := -len(c.wBuf)
+	c.wBuf = append(c.wBuf, b...)
+	for len(c.wBuf) > 0 {
+		if len(c.wBuf) < int32Size {
+			return len(b), nil
 		}
-		size := int32(binary.BigEndian.Uint32(b))
-		if len(b[int32Size:]) < int(size) {
-			return written, PartialWriteError{
-				expected: int(size),
-				actual:   len(b[int32Size:]),
-			}
+		size := int32(binary.BigEndian.Uint32(c.wBuf))
+		if len(c.wBuf[int32Size:]) < int(size) {
+			return len(b), nil
 		}
 		totalSize := int32Size + int(size)
 		// For now, we send each Kafka protocol message in its own WebSocket
@@ -136,13 +121,13 @@ func (c *Conn) Write(b []byte) (int, error) {
 		// possible, knowing that we should be able to ditch the shim and use
 		// TCP directly in the future. For now, we want to avoid any protocol
 		// modifications that are specific to WebSocket usage
-		if err := c.ws.WriteMessage(websocket.BinaryMessage, b[:totalSize]); err != nil {
-			return written, errors.Wrap(err, "shim: write websocket message failed")
+		if err := c.ws.WriteMessage(websocket.BinaryMessage, c.wBuf[:totalSize]); err != nil {
+			return max(written, 0), errors.Wrap(err, "shim: write websocket message failed")
 		}
 		written += totalSize
-		b = b[totalSize:]
+		c.wBuf = c.wBuf[totalSize:]
 	}
-	return written, nil
+	return max(written, 0), nil
 }
 
 func (c *Conn) Close() error {
@@ -170,4 +155,11 @@ func (c *Conn) SetReadDeadline(t time.Time) error {
 func (c *Conn) SetWriteDeadline(t time.Time) error {
 	// Equivalent to c.ws.UnderlyingConn().SetWriteDeadline(t)
 	return c.ws.SetWriteDeadline(t)
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

@@ -189,6 +189,19 @@ func TestWriteMany(t *testing.T) {
 func TestWritePartial(t *testing.T) {
 	addr := "localhost:8085"
 	handler := func(c *websocket.Conn) error {
+		mt, p1, err := c.ReadMessage()
+		if err != nil {
+			return err
+		}
+		assert.Equal(t, websocket.BinaryMessage, mt, "websocket message type is binary")
+		assert.Equal(t, msg1, p1, "buffer matches message")
+
+		mt, p2, err := c.ReadMessage()
+		if err != nil {
+			return err
+		}
+		assert.Equal(t, websocket.BinaryMessage, mt, "websocket message type is binary")
+		assert.Equal(t, msg2, p2, "buffer matches message")
 		return nil
 	}
 	defer StartServer(addr, handler).Stop()
@@ -198,12 +211,28 @@ func TestWritePartial(t *testing.T) {
 	assert.Nil(t, err)
 	defer c.Close()
 
-	truncLen := 50 + int32Size
-	msgTrunc := msg1[:truncLen]
-	n, err := c.Write(msgTrunc)
-	assert.ErrorIs(t, err, PartialWriteError{
-		expected: len(msg1) - int32Size,
-		actual:   truncLen - int32Size,
-	})
-	assert.Equal(t, 0, n)
+	// msg1: write first half of the size header
+	n, err := c.Write(msg1[:2])
+	assert.Equal(t, 2, n)
+	assert.Nil(t, err)
+
+	// msg1: write second half of the size header
+	n, err = c.Write(msg1[2:4])
+	assert.Equal(t, 2, n)
+	assert.Nil(t, err)
+
+	// msg1: write rest of the message
+	n, err = c.Write(msg1[4:])
+	assert.Equal(t, len(msg1)-4, n)
+	assert.Nil(t, err)
+
+	// msg2: write size header and part of message
+	n, err = c.Write(msg2[:30])
+	assert.Equal(t, 30, n)
+	assert.Nil(t, err)
+
+	// msg2: write rest of message
+	n, err = c.Write(msg2[30:])
+	assert.Equal(t, len(msg2)-30, n)
+	assert.Nil(t, err)
 }
