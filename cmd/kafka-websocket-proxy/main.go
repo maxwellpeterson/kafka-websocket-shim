@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	"github.com/maxwellpeterson/kafka-websocket-shim/pkg/shim"
@@ -40,39 +39,34 @@ func main() {
 	}
 	fmt.Printf("listening on port %s\n", *port)
 
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				select {
 				case <-ctx.Done():
-					return
+					return nil
 				default:
-					fmt.Printf("tcp listener failed: %v\n", err)
-					cancel()
-					return
+					// Returning error cancels context and triggers shutdown
+					return errors.Wrap(err, "tcp listener failed")
 				}
 			}
-			defer conn.Close()
 
 			connAddr := conn.RemoteAddr().String()
 			fmt.Printf("accepted tcp connection from %s\n", connAddr)
 
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			g.Go(func() error {
 				if err := handleClient(ctx, conn, dialer); err != nil {
 					fmt.Printf("connection with %s failed: %v\n", connAddr, err)
 				} else {
 					fmt.Printf("closed tcp connection with %s\n", connAddr)
 				}
-			}()
+				// Individual connections can fail without triggering shutdown
+				return nil
+			})
 		}
-	}()
+	})
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT)
@@ -82,12 +76,16 @@ func main() {
 		fmt.Printf("received %s, starting graceful shutdown\n", s.String())
 		cancel()
 	case <-ctx.Done():
-		// TCP listener failed and started shutdown on its own
-		fmt.Println("tcp listener failed, starting graceful shutdown")
+		// TCP listener failed and triggered shutdown on its own
 	}
 
-	ln.Close()
-	wg.Wait()
+	if err := ln.Close(); err != nil {
+		log.Fatal(errors.Wrap(err, "close tcp listener failed"))
+	}
+
+	if err := g.Wait(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func handleClient(ctx context.Context, conn net.Conn, dialer proxy.ContextDialer) error {
@@ -95,21 +93,20 @@ func handleClient(ctx context.Context, conn net.Conn, dialer proxy.ContextDialer
 	if err != nil {
 		return errors.Wrap(err, "dial websocket failed")
 	}
-	defer ws.Close()
 	fmt.Printf("opened websocket connection with %s\n", ws.RemoteAddr().String())
 
 	g, ctx := errgroup.WithContext(ctx)
-
 	// Pipe data from TCP connection to WebSocket connection
 	g.Go(pipeFunc(ctx, conn, ws))
-	// Pipe data from WebSocket connection to TCP connection
-	g.Go(pipeFunc(ctx, ws, conn))
-
 	g.Go(func() error {
 		<-ctx.Done()
-		conn.Close()
-		ws.Close()
-		return nil
+		return conn.Close()
+	})
+	// Pipe data from WebSocket connection to TCP connection
+	g.Go(pipeFunc(ctx, ws, conn))
+	g.Go(func() error {
+		<-ctx.Done()
+		return ws.Close()
 	})
 
 	if err := g.Wait(); err != nil && !errors.Is(err, io.EOF) {
