@@ -22,9 +22,9 @@ const (
 )
 
 var (
-	port   = flag.String("port", "8080", "the port to listen on (default 8080)")
-	broker = flag.String("broker", "localhost:8787", "the address of the broker (default localhost:8787)")
-	tls    = flag.Bool("tls", false, "whether to use tls for the broker connection (default false)")
+	port   = flag.String("port", "8080", "the port to listen on")
+	broker = flag.String("broker", "localhost:8787", "the address of the broker")
+	tls    = flag.Bool("tls", false, "use tls for the broker connection")
 )
 
 func main() {
