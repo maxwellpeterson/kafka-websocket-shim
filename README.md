@@ -6,6 +6,17 @@ A shim layer that enables existing Kafka clients to connect to a broker implemen
 
 This project includes a Go package that provides a `net.Conn` implementation that frames Kafka protocol messages into WebSocket messages, plus a `proxy.Dialer` and `proxy.ContextDialer` implementation for creating these connections. It also includes a standalone TCP proxy that provides the same functionality, and can be used with Kafka clients written in other languages.
 
+## How It Works
+
+All Kafka protocol messages use the following grammar (defined in the [Kafka Protocol Guide](https://kafka.apache.org/protocol.html#protocol_common)):
+
+```
+RequestOrResponse => Size (RequestMessage | ResponseMessage)
+  Size => int32
+```
+
+To convert a continuous steam of protocol messages into discrete WebSocket messages, all we need to do is read the size of the first protocol message as a 32-bit integer `n`, read the next `n` bytes of the stream, wrap these `n + 4` bytes in a WebSocket message, and repeat the same process for the remainder of the stream. It's super simple.
+
 ## Quick Start
 
 ### Go Package
