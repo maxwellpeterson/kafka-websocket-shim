@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/maxwellpeterson/kafka-websocket-shim/pkg/shim"
 	"github.com/pkg/errors"
@@ -18,7 +19,10 @@ import (
 )
 
 const (
-	bufSize = 4096
+	pipeBufSize       = 4096
+	dialBrokerRetries = 5
+	dialBrokerWait    = 200 * time.Millisecond
+	dialBrokerBackoff = 2
 )
 
 var (
@@ -89,9 +93,10 @@ func main() {
 }
 
 func handleClient(ctx context.Context, conn net.Conn, dialer proxy.ContextDialer) error {
-	ws, err := dialer.DialContext(ctx, "tcp", *broker)
+	ws, err := dialBroker(ctx, dialer)
 	if err != nil {
-		return errors.Wrap(err, "dial websocket failed")
+		defer conn.Close()
+		return errors.Wrap(err, "dial broker failed")
 	}
 	fmt.Printf("opened websocket connection with %s\n", ws.RemoteAddr().String())
 
@@ -115,9 +120,32 @@ func handleClient(ctx context.Context, conn net.Conn, dialer proxy.ContextDialer
 	return nil
 }
 
+// Open a WebSocket connection with the broker, using exponential backoff if the
+// connection fails. When running the broker in local mode using Docker Compose,
+// the broker takes 1-2 seconds to become ready after the container is created,
+// and this backoff gives it plenty of time to become ready
+func dialBroker(ctx context.Context, dialer proxy.ContextDialer) (net.Conn, error) {
+	var dialErr error
+	wait := dialBrokerWait
+	for i := 0; i < dialBrokerRetries; i++ {
+		if ws, err := dialer.DialContext(ctx, "tcp", *broker); err != nil {
+			if i < dialBrokerRetries-1 {
+				// Don't sleep on the final iteration, because
+				// dialer.DialContext won't be called again
+				time.Sleep(wait)
+				wait *= dialBrokerBackoff
+			}
+			dialErr = err
+		} else {
+			return ws, nil
+		}
+	}
+	return nil, dialErr
+}
+
 func pipeFunc(ctx context.Context, src net.Conn, dst net.Conn) func() error {
 	return func() error {
-		buf := make([]byte, bufSize)
+		buf := make([]byte, pipeBufSize)
 		for {
 			if _, err := pipe(src, dst, buf); err != nil {
 				select {
