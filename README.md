@@ -2,9 +2,21 @@
 
 **Note:** This is a child project of [`kafka-worker`](https://github.com/maxwellpeterson/kafka-worker)
 
-A shim layer that enables existing Kafka clients to connect to a broker implementation running on Cloudflare Workers with minimal configuration changes.
+A shim layer that enables existing Kafka clients to connect to a broker implementation running on Cloudflare Workers with minimal configuration changes. As with the parent project, this is a simple proof of concept and not intended to be used for anything serious.
 
-This project includes a Go package that provides a `net.Conn` implementation that frames Kafka protocol messages into WebSocket messages, plus a `proxy.Dialer` and `proxy.ContextDialer` implementation for creating these connections. It also includes a standalone TCP proxy that provides the same functionality, and can be used with Kafka clients written in other languages.
+## Modes of Operation
+
+### Go Package
+
+For Kafka clients written in Go, this project provides a Go package with a `net.Conn` implementation that frames Kafka protocol messages into WebSocket messages, plus a `proxy.Dialer` and `proxy.ContextDialer` implementation that creates these connections.
+
+See [`kafka-worker-demo`](https://github.com/maxwellpeterson/kafka-worker-demo) for an example that uses this package with the [`franz-go`](https://github.com/twmb/franz-go) client.
+
+### TCP Proxy
+
+For Kafka clients written in other languages, this project provides a standalone TCP proxy that frames Kafka protocol messages into WebSocket messages and forwards them to the broker implementation.
+
+See [`kafka-worker-demo`](https://github.com/maxwellpeterson/kafka-worker-demo) for an example that uses the proxy with the [`kafka-python`](https://github.com/dpkp/kafka-python) client.
 
 ## How It Works
 
@@ -15,7 +27,7 @@ RequestOrResponse => Size (RequestMessage | ResponseMessage)
   Size => int32
 ```
 
-To convert a continuous steam of protocol messages into discrete WebSocket messages, all we need to do is read the size of the first protocol message as a 32-bit integer `n`, read the next `n` bytes of the stream, wrap these `n + 4` bytes in a WebSocket message, and repeat the same process for the remainder of the stream. It's super simple.
+To convert a continuous stream of protocol messages into discrete WebSocket messages, all we need to do is read the size of the first protocol message as a 32-bit integer `n`, read the next `n` bytes of the stream, wrap these `n + 4` bytes in a WebSocket message, and repeat the same process for the remainder of the stream. It's super simple.
 
 ## Quick Start
 
@@ -48,7 +60,7 @@ kafka-websocket-proxy
 
 This method requires a local installation of Docker.
 
-```
+```shell
 docker run --rm --publish 8080:8080 ghcr.io/maxwellpeterson/kafka-websocket-proxy:main -broker=mybroker.workers.dev:443 -tls
 ```
 
